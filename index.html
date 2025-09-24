@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>My Music</title>
+<style>
+  :root{--max-width:980px;--gap:12px;--muted:#6b7280;--accent:#0b84ff}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;margin:24px;padding:0;color:#111;display:flex;justify-content:center}
+  .wrap{width:100%;max-width:var(--max-width);padding:0 16px}
+  header{display:flex;gap:var(--gap);align-items:center;flex-wrap:wrap}
+  h1{margin:0;font-size:1.25rem}
+  .controls{display:flex;gap:8px;align-items:center;margin-left:auto}
+  input[type="search"]{padding:8px 10px;border:1px solid #ddd;border-radius:8px;min-width:220px}
+  #player{width:100%;margin-top:14px;border-radius:8px;background:#fafafa;padding:8px}
+  .meta{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap}
+  .meta .now{font-weight:600}
+  .list{margin-top:14px;border-radius:8px;overflow:hidden;border:1px solid #eee;background:#fff}
+  .row{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #f4f4f6}
+  .row:last-child{border-bottom:0}
+  .left{display:flex;align-items:center;gap:12px;min-width:0}
+  .title{font-size:0.98rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sub{font-size:0.85rem;color:var(--muted)}
+  .actions{display:flex;gap:8px;align-items:center}
+  button{background:var(--accent);border:0;color:#fff;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:0.9rem}
+  button.ghost{background:#f3f4f6;color:#111;border:1px solid #e6e6e9}
+  a.download{font-size:0.85rem;color:var(--muted);text-decoration:none;padding:6px 8px;border-radius:6px}
+  .empty{padding:20px;text-align:center;color:var(--muted)}
+  footer{margin-top:18px;color:var(--muted);font-size:0.85rem}
+  @media (max-width:600px){.controls{width:100%;margin-left:0;justify-content:stretch}input[type="search"]{flex:1}}
+</style>
+</head>
+<body>
+  <div class="wrap" id="app">
+    <header>
+      <h1>My Music</h1>
+      <div class="controls">
+        <input id="search" type="search" placeholder="Search tracks or artists" aria-label="Search tracks" />
+        <button id="shuffle">Shuffle</button>
+        <button id="sort">Sort A→Z</button>
+      </div>
+    </header>
+
+    <audio id="player" controls preload="metadata"></audio>
+
+    <div class="meta" id="meta" aria-live="polite" style="display:none">
+      <div class="now">Now playing: <span id="nowTitle"></span></div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button id="prev" class="ghost">Prev</button>
+        <button id="next" class="ghost">Next</button>
+      </div>
+    </div>
+
+    <div class="list" id="tracksList" role="listbox" tabindex="0" aria-label="Track list">
+      <div id="tracksInner"></div>
+    </div>
+
+    <div id="empty" class="empty" style="display:none">No tracks found.</div>
+
+    <footer>
+      Files served from <code>/media/</code>. If you add songs, update <code>tracks.json</code>.
+    </footer>
+  </div>
+
+<script>
+/*
+  Usage notes:
+  - Place this file at public/index.html
+  - Put MP3 files in public/media/
+  - Create public/tracks.json:
+    { "tracks": ["song1.mp3","song-two.mp3","Artist - Title.mp3"] }
+  - GitHub Pages will serve the site at https://username.github.io/repo/
+*/
+
+const TRACKS_JSON = './tracks.json';
+const MEDIA_PREFIX = './media/';
+
+const player = document.getElementById('player');
+const tracksInner = document.getElementById('tracksInner');
+const searchInput = document.getElementById('search');
+const nowTitle = document.getElementById('nowTitle');
+const metaEl = document.getElementById('meta');
+const emptyEl = document.getElementById('empty');
+const shuffleBtn = document.getElementById('shuffle');
+const sortBtn = document.getElementById('sort');
+const prevBtn = document.getElementById('prev');
+const nextBtn = document.getElementById('next');
+
+let allTracks = [];
+let filtered = [];
+let index = -1;
+let sortAsc = true;
+
+async function loadTracks() {
+  try {
+    const res = await fetch(TRACKS_JSON, {cache: "no-store"});
+    if (!res.ok) throw new Error('tracks.json not found');
+    const j = await res.json();
+    allTracks = Array.isArray(j.tracks) ? j.tracks.slice() : [];
+    applyFilter();
+  } catch (e) {
+    console.error(e);
+    tracksInner.innerHTML = '<div class="row"><div class="left"><div class="title">tracks.json missing or invalid</div></div></div>';
+  }
+}
+
+function applyFilter() {
+  const q = searchInput.value.trim().toLowerCase();
+  filtered = allTracks.filter(t => !q || t.toLowerCase().includes(q));
+  renderList();
+}
+
+function renderList() {
+  tracksInner.innerHTML = '';
+  if (!filtered.length) {
+    emptyEl.style.display = 'block';
+    metaEl.style.display = 'none';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  metaEl.style.display = (index >= 0) ? 'flex' : 'none';
+  filtered.forEach((file, i) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.dataset.idx = i;
+
+    const left = document.createElement('div');
+    left.className = 'left';
+
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = file;
+
+    const sub = document.createElement('div');
+    sub.className = 'sub';
+    sub.textContent = humanSizeHint(file);
+
+    left.appendChild(title);
+    left.appendChild(sub);
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+
+    const play = document.createElement('button');
+    play.textContent = 'Play';
+    play.onclick = (e) => { e.stopPropagation(); playAt(i); };
+
+    const dl = document.createElement('a');
+    dl.className = 'download';
+    dl.textContent = 'Download';
+    dl.href = MEDIA_PREFIX + encodeURIComponent(file);
+    dl.setAttribute('download','');
+
+    actions.appendChild(play);
+    actions.appendChild(dl);
+
+    row.appendChild(left);
+    row.appendChild(actions);
+
+    // clicking row plays
+    row.onclick = () => playAt(i);
+
+    tracksInner.appendChild(row);
+  });
+}
+
+function humanSizeHint(name){
+  // Placeholder: show filename length or hint; actual byte sizes not available without metadata
+  return '';
+}
+
+function playAt(i) {
+  if (i < 0 || i >= filtered.length) return;
+  index = i;
+  const file = filtered[i];
+  const src = MEDIA_PREFIX + encodeURIComponent(file);
+  player.src = src;
+  player.play().catch(()=>{});
+  nowTitle.textContent = file;
+  metaEl.style.display = 'flex';
+  highlightCurrent();
+}
+
+function highlightCurrent() {
+  const rows = tracksInner.querySelectorAll('.row');
+  rows.forEach(r => r.classList.remove('playing'));
+  const r = tracksInner.querySelector(`.row[data-idx="${index}"]`);
+  if (r) r.classList.add('playing');
+  r && r.scrollIntoView({block:'nearest',behavior:'smooth'});
+}
+
+player.addEventListener('ended', () => {
+  // auto-next
+  if (index + 1 < filtered.length) playAt(index + 1);
+});
+
+prevBtn.addEventListener('click', (e) => { e.stopPropagation(); if (index > 0) playAt(index - 1); });
+nextBtn.addEventListener('click', (e) => { e.stopPropagation(); if (index + 1 < filtered.length) playAt(index + 1); });
+
+searchInput.addEventListener('input', () => { applyFilter(); index = -1; player.pause(); player.removeAttribute('src'); });
+shuffleBtn.addEventListener('click', () => {
+  shuffleArray(filtered);
+  renderList();
+});
+sortBtn.addEventListener('click', () => {
+  sortAsc = !sortAsc;
+  filtered.sort((a,b) => sortAsc ? a.localeCompare(b) : b.localeCompare(a));
+  sortBtn.textContent = sortAsc ? 'Sort A→Z' : 'Sort Z→A';
+  renderList();
+});
+
+// keyboard shortcuts: space play/pause, left/right prev/next
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space') { e.preventDefault(); if (player.paused) player.play(); else player.pause(); }
+  if (e.code === 'ArrowLeft') { if (index > 0) playAt(index - 1); }
+  if (e.code === 'ArrowRight') { if (index + 1 < filtered.length) playAt(index + 1); }
+});
+
+function shuffleArray(arr){
+  for(let i = arr.length -1; i>0; i--){
+    const j = Math.floor(Math.random() * (i+1));
+    [arr[i],arr[j]] = [arr[j],arr[i]];
+  }
+}
+
+// If tracks.json is missing, you can manually set allTracks here for quick testing:
+// allTracks = ["song1.mp3","song2.mp3"];
+
+loadTracks();
+</script>
+</body>
+</html>
